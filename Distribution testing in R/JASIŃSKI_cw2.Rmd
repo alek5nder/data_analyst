@@ -1,0 +1,688 @@
+---
+title: "Zadanie 2"
+author: "Aleksander Jasiński"
+date: "`r Sys.Date()`"
+output:
+    html_document:
+    toc: true
+    toc_float: true 
+    number_sections: true 
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(gridExtra)
+library(knitr)
+library(reshape2)
+library(tidyr)
+library(grid)
+library(dplyr)
+library(gridExtra)
+```
+
+
+
+# Część I
+
+Sprawdźmy jak zmienia się moc testów próbek losowanych z rozkładu testu t-Studenta w zależności od:
+- liczby danych
+- liczby stopni swobody generowanego rozkładu
+
+Losowanie próbek będziemy powtarzać 100 razy. Niech nasza liczność (`n`) oraz stopnie swobody (`df`) przyjmują następujące wartości:
+
+```{r echo=FALSE}
+n <- c(10, 50, 100,500)
+df<- c(5, 10, 30)
+N <- 100
+print("Liczność: ")
+n
+print("St. swobody: ")
+df
+```
+Założenia naszych testów:
+
+$\\ H_{0}: próbka\ pochodzi\ z\ rozkladu\ normalnego$
+
+$\\ H_{1}: próbka\ pochodzi\ z\ rozkladu\ nienormalnego$
+
+
+
+**Test Chi2** porównuje wartości w przedziale. Dla liczności przedziału mniejszej niż 5 nasze wyniki mogą być nieadekwatne, dlatego przy wielkości próbki n=10 otrzymujemy wartość NA (R wyrzuca `warnings` przy próbie wyliczenia). Dzięki temu unikamy błędnych wniosków, które mogłyby płynąć ze wspomnianych małych próbek.
+
+Oto wyniki testu `Shapiro-Wilka`, `KS` oraz `chi2` w zależności od liczności oraz st. swobody:
+
+
+```{r echo=FALSE, warning=FALSE}
+wyniki_shapiro <- expand.grid(n=n,df=df, pvalue=NA )
+wyniki_ks <- expand.grid(n = n, df = df, pvalue = NA)
+wyniki_chi2 <- expand.grid(n = n, df = df, pvalue = NA)
+for (i in 1:nrow(wyniki_shapiro)) {
+  probka <- rt(wyniki_shapiro$n[i], wyniki_shapiro$df[i])
+  wyniki_shapiro$pvalue[i] <- round(shapiro.test(probka)$p.value,4)
+  
+  ks_test <- ks.test(probka, "pt", df = wyniki_ks$df[i])
+  wyniki_ks$pvalue[i] <- round(ks_test$p.value, 4)
+  
+  breaks <- qt(seq(0, 1, length.out = 6), df = wyniki_chi2$df[i]) 
+  observed <- table(cut(probka, breaks, include.lowest = TRUE)) 
+  
+
+  expected_probs <- diff(pt(breaks, df = wyniki_chi2$df[i])) 
+  expected <- expected_probs * length(probka)
+  
+  if (any(expected < 5)) {
+    wyniki_chi2$pvalue[i] <- NA
+  } else {
+    chi2_test <- chisq.test(observed, p = expected / sum(expected), rescale.p = TRUE)
+    wyniki_chi2$pvalue[i] <- round(chi2_test$p.value, 4)
+  }
+  
+}
+
+```
+
+
+
+
+
+```{r}
+wyniki_shapiro
+wyniki_ks
+wyniki_chi2
+
+```
+
+Przeprowadźmy `N` (100) losowań `n-elementowych` z rozkładu t-Studenta z `df` stopniami swobody próbek i sprawdźmy jak zmienia się moc testu:
+
+```{r echo=FALSE}
+moc_shapiro <- expand.grid(n = n, df = df, power = NA)
+moc_ks <- expand.grid(n = n, df = df, power = NA)
+moc_chi2 <- expand.grid(n = n, df = df, power = NA)
+
+for (i in 1:nrow(moc_shapiro)) {
+  pvalues_shapiro <- numeric(N)
+  pvalues_ks <- numeric(N)
+  pvalues_chi2 <- numeric(N)
+  
+  for (j in 1:N) {
+
+    probka <- rt(moc_shapiro$n[i], moc_shapiro$df[i])  
+
+    pvalues_shapiro[j] <- shapiro.test(probka)$p.value
+    
+
+    ks_test <- ks.test(probka, "pt", df = moc_ks$df[i])
+    pvalues_ks[j] <- ks_test$p.value
+    
+
+    breaks <- qt(seq(0, 1, length.out = 6), df = moc_chi2$df[i])
+    observed <- table(cut(probka, breaks, include.lowest = TRUE))
+    
+    expected_probs <- diff(pt(breaks, df = moc_chi2$df[i]))
+    expected <- expected_probs * sum(observed)
+    
+    if (any(expected < 5)) {
+      pvalues_chi2[j] <- NA
+    } else {
+      chi2_test <- chisq.test(observed, p = expected / sum(expected), rescale.p = TRUE)
+      pvalues_chi2[j] <- chi2_test$p.value
+    }
+  }
+
+  moc_shapiro$power[i] <- mean(pvalues_shapiro < 0.05, na.rm = TRUE)
+  moc_ks$power[i] <- mean(pvalues_ks < 0.05, na.rm = TRUE)
+  moc_chi2$power[i] <- mean(pvalues_chi2 < 0.05, na.rm = TRUE)
+}
+
+head(moc_shapiro)
+head(moc_ks)
+head(moc_chi2)
+```
+
+
+#### Analiza 
+
+Wraz ze wzrostem stopni swobody rozkład t-Studenta zaczyna przypominać rozkład normalny, dlatego dla ujednolicenia naszych obserwacji i zobrazowania zmienności mocy testu w zależności od stopni swobody **przefiltrujmy nasze dane dla `df=10`**.
+
+```{r echo=FALSE, warning=FALSE}
+moc_all <- bind_rows(
+  moc_shapiro %>% mutate(test = "Shapiro-Wilk"),
+  moc_ks %>% mutate(test = "Kolmogorov-Smirnov"),
+  moc_chi2 %>% mutate(test = "Chi-Square")
+)
+moc_summary <- moc_all %>% filter(df==10)%>%
+  group_by(n, test) %>%
+  summarize(mean_power = mean(power, na.rm = TRUE), .groups = "drop")
+
+
+ggplot(moc_summary, aes(x = as.factor(n), y = mean_power, fill = as.factor(n))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~test, scales = "free_y") +
+  xlab("Liczność próbki") +
+  ylab("Moc testu") +
+  ggtitle("Moc testów statystycznych w zależności od liczności próbki") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+- Najlepszy test do wykrywania nienormalności w tym przypadku to **test Shapiro-Wilka**. Wraz ze wzrostem liczności próbki rośnie jego moc testu.
+- Moc KS jest znacznie niższa niż Shapiro-Wilka, co sugeruje, że **nie jest idealny do wykrywania różnic między t-Studentem** (`df = 10`) a rozkładem normalnym.
+- Test ten wymaga odpowiedniego podziału na kategorie i dostatecznej liczby obserwacji w każdej kategorii, dlatego właśnie nie byliśmy w stanie wykonać go dla próbki o liczności 10, a w przypadku pozostałych próbek możemy zauważyć brak monotonicznego wzrostu mocy testu.
+
+Zwizualizujmy sobie jeszcze przypadek z danymi przefiltrowanymi dla `df=30`:
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+moc_summary <- moc_all %>% filter(df==30)%>%
+  group_by(n, test) %>%
+  summarize(mean_power = mean(power, na.rm = TRUE), .groups = "drop")
+
+
+ggplot(moc_summary, aes(x = as.factor(n), y = mean_power, fill = as.factor(n))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~test, scales = "free_y") +
+  xlab("Liczność próbki") +
+  ylab("Moc testu") +
+  ggtitle("Moc testów statystycznych w zależności od liczności próbki") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+Moc wszystkich testów jest niższa niż dla `df = 10` – oznacza to, że rozkład t-Studenta z `df = 30` jest już bardzo podobny do normalnego, więc trudniej wykryć odchylenie od normalności
+
+**Analiza wpływu stopni swobody**
+
+Sprawdźmy uśrednioną moc testu dla naszych testów. W tym przypadku przefiltrujmy dane dla próbki o wielkości `n=50`:
+
+```{r echo=FALSE, warning=FALSE}
+moc_summary <- moc_all %>% filter(n==50)%>%
+  group_by(df, test) %>%
+  summarize(mean_power = mean(power, na.rm = TRUE), .groups = "drop")
+
+
+ggplot(moc_summary, aes(x = as.factor(df), y = mean_power, fill = as.factor(df))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~test, scales = "free_y") +
+  xlab("Stopnie swobody") +
+  ylab("Moc testu") +
+  ggtitle("Moc testów statystycznych w zależności od stopni swobody") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+- Wraz ze wzrostem stopni swobody maleje moc testu. Niestabilność w tym przypadku wykazuje test KS.
+- Chi2 i Kolmogorov-Smirnov wydają się bardziej stabilne w porównaniu do Shapiro-Wilka, który traci moc wraz ze wzrostem stopni swobody.
+- Test Shapiro-Wilka jest bardzo skuteczny dla małych stopni swobody, ale jego moc szybko maleje.
+
+
+# Część II: 
+Niech
+
+$alpha=0.05$
+
+
+W tej części zobaczmy ile wynosi odsetek odrzuceń prawdziwej $H_{0}$ w teście KS oraz chi2. Próbkę będziemy losować z rozkładu chi2 o `df` stopniach swobody. Następnie otrzymane wyniki porównamy z wynikami testów metodą **Probability Integral Transform**.
+
+**Uwaga:** Tak jak zostało wspomniane wcześniej, dla małych próbek test chi-kwadrat może działać niepoprawnie,. Każda kategoria powinna mieć oczekiwaną liczebność co najmniej 5. W przeciwnym razie aproksymacja rozkładem chi-kwadrat może być błędna o czym informuje nas sam R.
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(123)
+
+moc2 <- expand.grid(n = n, df = df, pval_ks = NA,pval_pit_ks=NA,pval_chi2=NA,pval_pit_chi2=NA)
+odrzucone_ks <-0
+for(k in 1:N)
+{
+  for(i in 1:nrow(moc2))
+{
+  probka <- rchisq(moc2$n[i],moc2$df[i])
+  moc2$pval_ks[i] <- ks.test(probka,"pchisq",df=moc2$df[i])$p.value
+  
+  if(moc2$pval_ks[i]<0)
+  {
+    odrzucone_ks <- odrzucone_ks+1
+  }
+  
+    hist_data <- hist(probka, max(5, sqrt(moc2$n[i])), plot = FALSE)
+    obs_freq <- hist_data$counts
+    breaks <- hist_data$breaks
+
+    exp_freq <- diff(pchisq(breaks, df = moc2$df[i])) * moc2$n[i]
+
+    moc2$pval_chi2[i] <- chisq.test(obs_freq, p = exp_freq / sum(exp_freq))$p.value
+
+   # testy PIT
+    probka_pit <- pchisq(probka, df = moc2$df[i])
+    moc2$pval_pit_ks[i] <- ks.test(probka_pit, "punif", 0, 1)$p.value
+    
+    
+    hist_pit <- hist(probka_pit, breaks = max(5, sqrt(moc2$n[i])), plot = FALSE)
+    obs_pit_freq <- hist_pit$counts
+    breaks_pit <- hist_pit$breaks
+
+    exp_pit_freq <- diff(punif(breaks_pit, 0, 1)) * moc2$n[i]
+    moc2$pval_pit_chi2[i] <- chisq.test(obs_pit_freq, p = exp_pit_freq / sum(exp_pit_freq))$p.value
+    
+
+}
+
+}
+
+
+```
+
+
+
+```{r}
+kable(moc2)
+```
+
+- Test KS na surowej próbce i test PIT na transformowanych wartościach dają identyczne `p-value`. 
+- Test PIT ma bardziej "ciągłą" skalę niż histogram.
+- Transformacja **PIT zmienia wyniki testu chi2**.
+
+w przypadku metody PIT jeżeli dane rzeczywiście pochodzą z rozkładu chi2 to wartości $U_{i}$ powinny być rozłożone zgodnie z rozkładem jednostajnym na $[0;1]$. Dlatego też wartości testu KS oraz testu KS z uwzględnieniem metody PIT są identyczne.
+
+
+Obliczmy moc statystyczną dla naszych testów:
+
+```{r echo=FALSE, warning=FALSE}
+set.seed(123)
+
+n_vals <- n
+df_vals <- df
+
+
+moc2 <- expand.grid(n = n_vals, df = df_vals, power_ks = 0,
+                    power_pit_ks = 0, power_chi2 = 0, power_pit_chi2 = 0)
+
+
+for (i in 1:nrow(moc2)) {
+  n <- moc2$n[i]
+  df <- moc2$df[i]
+  
+  odrzucone_ks <- 0
+  odrzucone_pit_ks <- 0
+  odrzucone_chi2 <- 0
+  odrzucone_pit_chi2 <- 0
+  
+  for (k in 1:N) {
+    probka <- rchisq(n, df)
+    
+
+    if (ks.test(probka, "pchisq", df = df)$p.value < 0.05) {
+      odrzucone_ks <- odrzucone_ks + 1
+    }
+    
+
+    hist_data <- hist(probka, breaks = max(5, sqrt(n)), plot = FALSE)
+    obs_freq <- hist_data$counts
+    breaks <- hist_data$breaks
+    exp_freq <- diff(pchisq(breaks, df = df)) * n
+    
+    if (chisq.test(obs_freq, p = exp_freq / sum(exp_freq))$p.value < 0.05) {
+      odrzucone_chi2 <- odrzucone_chi2 + 1
+    }
+    
+
+    probka_pit <- pchisq(probka, df = df)
+    
+    if (ks.test(probka_pit, "punif", 0, 1)$p.value < 0.05) {
+      odrzucone_pit_ks <- odrzucone_pit_ks + 1
+    }
+    
+    hist_pit <- hist(probka_pit, breaks = max(5, sqrt(n)), plot = FALSE)
+    obs_pit_freq <- hist_pit$counts
+    breaks_pit <- hist_pit$breaks
+    exp_pit_freq <- diff(punif(breaks_pit, 0, 1)) * n
+    
+    if (chisq.test(obs_pit_freq, p = exp_pit_freq / sum(exp_pit_freq))$p.value < 0.05) {
+      odrzucone_pit_chi2 <- odrzucone_pit_chi2 + 1
+    }
+  }
+  
+
+  moc2$power_ks[i] <- odrzucone_ks / N
+  moc2$power_pit_ks[i] <- odrzucone_pit_ks / N
+  moc2$power_chi2[i] <- odrzucone_chi2 / N
+  moc2$power_pit_chi2[i] <- odrzucone_pit_chi2 / N
+}
+
+
+moc2
+
+```
+
+
+
+
+```{r}
+filtered_data <- subset(moc2, df==10)
+filtered_data_long <- filtered_data %>%
+  pivot_longer(cols = c(power_ks, power_pit_ks), 
+               names_to = "Test", 
+               values_to = "Odsetek")
+
+
+```
+
+
+Wykres 1:
+
+```{r echo=FALSE}
+ggplot(filtered_data_long, aes(x = factor(n), y = Odsetek, fill = Test)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(title = "Odsetek odrzuceń dla testów KS i PIT-KS (df = 10)",
+       x = "Liczba danych (n)", y = "Odsetek odrzuceń") +
+  scale_fill_manual(values = c("power_ks" = "blue", "power_pit_ks" = "red"),
+                    labels = c("KS", "PIT-KS")) +
+  theme_minimal()
+
+```
+
+
+Wykres2:
+
+```{r echo=FALSE}
+filtered_data_long <- filtered_data %>%
+  pivot_longer(cols = c(power_chi2, power_pit_chi2), 
+               names_to = "Test", 
+               values_to = "Odsetek")
+
+ggplot(filtered_data_long, aes(x = factor(n), y = Odsetek, fill = Test)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  labs(title = "Odsetek odrzuceń dla testów Chi2 i PIT-Chi2 (df = 10)",
+       x = "Liczba danych (n)", y = "Odsetek odrzuceń") +
+  scale_fill_manual(values = c("power_chi2" = "green", "power_pit_chi2" = "purple"),
+                    labels = c("Chi2", "PIT-Chi2")) +
+  theme_minimal()
+```
+
+
+
+#### Wnioski:
+
+Wyniki pokazują, że test Kołmogorowa-Smirnowa (KS) na surowej próbce i po transformacji PIT daje identyczną moc we wszystkich przypadkach. 
+Z kolei test chi-kwadrat na surowych danych ma wyższą moc niż KS, zwłaszcza dla większych próbek i większych stopni swobody, wykazuje większą czułość w tych warunkach. Natomiast test chi-kwadrat po transformacji wykazuje **najniższą moc**, często bliską zeru, co sugeruje, że transformacja PIT może utrudniać wykrywanie różnic w rozkładzie w przypadku tego testu.
+
+
+# Część III
+
+Zbadajmy moc testu Kołmogorowa-Smirnowa dla próbek z rozkładu chi2 o różnych stoniach swobody, manipulując danymi tak żeby wszystkie posiadały taką samą wartość oczekiwaną. W rozkładzie chi2 zachodzi równość:
+
+$E(X)=k$
+
+czyli wartość oczekiwana jest równa liczbie stopni swobody.
+
+```{r echo=FALSE}
+
+centr <- function(x, df_target) {
+  x - mean(x) + mean(rchisq(length(x), df = df_target))
+}
+
+
+wyniki <- list()
+
+
+for (n in n_vals) {
+  for (df1 in df_vals) {
+    for (df2 in df_vals) {
+      p_values <- replicate(N, {
+        x <- rchisq(n, df1) |> centr(df_target = df1)
+        y <- rchisq(n, df2) |> centr(df_target = df2)
+        ks_test <- ks.test(x, y)
+        ks_test$p.value
+      })
+
+      power <- mean(p_values < 0.05)
+
+      wyniki <- append(wyniki, list(data.frame(n, df1, df2, power)))
+    }
+  }
+}
+
+
+moc_ks <- do.call(rbind, wyniki)
+```
+
+```{r}
+
+w1 <- moc_ks %>% group_by(n) %>%
+  summarize(mean_power=mean(power))
+kable(w1)
+```
+
+
+Pierwszym zauważalnym wnioskiem, który możemy zauważyć jest fakt, że wraz ze wzrostem liczności próbki wartość mocy testu stabylizuje się wokół $0.69$.
+
+
+Wizualizacja:
+
+```{r echo=FALSE}
+
+
+ggplot(w1, aes(as.factor(n),mean_power, fill=as.factor(n)))+
+  geom_bar(stat="identity")+
+  ylab("moc testu")+
+  xlab("licznosc probki")+
+  ylim(0,1)
+```
+
+#### Wnioski:
+
+- Wartości są bardzo zbliżone.Moc testu jest podobna dla wszystkich wartości `n`. 
+- Widać widoczny wzrost względem próbki `n=10`.
+- Hipotezy zerowe są prawdziwe w większości przypadków (`df1==df2`).
+
+Sprawdźmy czy moc testu rośnie jeśli faktycznie `df1==df2`:
+
+
+```{r echo=FALSE, warning=FALSE}
+moc_ks_filtered <- moc_ks |> filter(df1 == df2)
+
+
+ggplot(moc_ks_filtered, aes(x = df1, y = power, group = n, color = factor(n))) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Moc testu Kołmogorowa-Smirnowa dla df1 == df2",
+    x = "Stopnie swobody (df1 = df2)",
+    y = "Moc testu",
+    color = "Liczność próbki (n)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+#### Wnioski:
+
+- Rozkłady chi2 z większymi df są **bardziej podobne do siebie**, więc trudniej je odróżnić.
+- Możemy zauwazyć, że większe próbki (np. `n=500`) łatwiej wykrywają różnice między rozkładami.
+- Jesli `df1 = df2`, dystrybuanty są niemal identyczne → test rzadko wykrywa różnice.
+
+Sprawdźmy jak wygląda sytuacja kiedy `df1!=df2`:
+
+```{r echo=FALSE}
+moc_ks_filtered <- moc_ks |> filter(df1 != df2)
+
+ggplot(moc_ks_filtered, aes(x = as.factor(df2), y = power, color = as.factor(df1), group = df1)) +
+  geom_point(size = 4) +           
+  geom_line(size = 1.5) +           
+  facet_grid(. ~ n) +                 
+  scale_y_continuous(limits = c(0, 1)) + 
+  labs(
+    title = "Moc testu Kołmogorowa-Smirnowa dla df1 != df2",
+    x = "df2 (Stopnie swobody drugiej próbki)",
+    y = "Moc testu",
+    color = "df1 (Stopnie swobody pierwszej próbki)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(size = 14, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  )
+```
+
+
+#### Wnioski:
+
+- Dla małych próbek moc testu mocno zależy od różnicy między df1 i df2
+- Dla większych próbek moc testu wynosi 1, czyli **test Kołmogorowa-Smirnowa** prawie zawsze wykrywa różnice między tymi rozkładami
+- Nawet jeśli będziemy mieli nieznaczną różnicę pomiędzy naszymi próbkami to dla `n>=50` test KS będzie ją wkrywał, nie zawsze jest to porządany przez nas rezultat.
+
+
+Wyszczególnijmy sobie jezcze przypadek, gdy `df1==5`, ponieważ na wykresie powyżej nie jest on widoczny:
+
+
+```{r echo=FALSE}
+moc_ks_filtered <- moc_ks |> filter(df1 != df2&df1==5)
+ggplot(moc_ks_filtered, aes(x = as.factor(df2), y = power, color = as.factor(df1), group = df1)) +
+  geom_point(size = 4) +           
+  geom_line(size = 1.5) +           
+  facet_grid(. ~ n) +                 
+  scale_y_continuous(limits = c(0, 1)) + 
+  labs(
+    title = "Moc testu Kołmogorowa-Smirnowa dla df1 != df2",
+    x = "df2 (Stopnie swobody drugiej próbki)",
+    y = "Moc testu",
+    color = "df1 (Stopnie swobody pierwszej próbki)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(size = 14, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14)
+  )
+```
+
+
+# Część IV
+
+
+
+Sprawdźmy wpływ liczby klas (`breaks`) na odsetek odrzuceń hipotezy zerowej w teście chi2 przy weryfikacji zgodności z rozkładem chi2.
+
+
+
+```{r echo=FALSE, warning=FALSE}
+n_bins <- seq(5, 20, by = 5)
+results <- expand.grid(n = n_vals, df = df_vals, bins = n_bins)
+results$reject_rate <- 0
+
+
+for (i in 1:nrow(results)) {
+  n <- results$n[i]
+  df <- results$df[i]
+  bins <- results$bins[i]
+  
+  rejections <- 0
+  
+  for (j in 1:N) {
+    probka <- rchisq(n, df)
+    
+
+    hist_counts <- hist(probka, breaks = bins, plot = FALSE)$counts
+
+    breaks <- hist(probka, breaks = bins, plot = FALSE)$breaks
+    expected_counts <- diff(pchisq(breaks, df)) * n
+    
+
+    valid <- expected_counts > 0
+    test_result <- chisq.test(hist_counts[valid], p = expected_counts[valid], rescale.p = TRUE)
+    
+
+    if (test_result$p.value < 0.05) {
+      rejections <- rejections + 1
+    }
+  }
+
+  results$reject_rate[i] <- rejections / N
+}
+```
+
+
+
+Pamiętajmy, że dla małych prób (`n=10`) nasz test może mieć dużą zmienność i prowadzić do "fałszywych" odrzuceń.
+
+Wizualizacja wyników:
+
+
+```{r echo=FALSE}
+ggplot(results, aes(x = bins, y = reject_rate, color = factor(n))) +
+  geom_line() +
+  facet_wrap(~ df, scales = "free_y") +
+  labs(
+    title = "Wpływ liczby klas histogramu na odsetek odrzuceń H0",
+    x = "Liczba przedziałów (klas)",
+    y = "Odsetek odrzuceń H0",
+    color = "Liczność próby"
+  ) +
+  theme_minimal()
+```
+
+
+Sprawdźmy wpływ samej wielkości próbki oraz liczby klas przyjmując `df=10`:
+
+```{r echo=FALSE}
+results_avg <- results %>%
+  filter(df == 10) %>%
+  group_by(n, bins) %>%
+  summarise(mean_reject_rate = mean(reject_rate), .groups = "drop")
+
+
+ggplot(results_avg, aes(x = n, y = mean_reject_rate, color = factor(bins))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  facet_wrap(~bins) + 
+  scale_x_log10() +    
+  labs(
+    title = "Wpływ liczby danych i liczby klas na odsetek odrzuceń H0 w teście χ²",
+    x = "Liczność próby (n)",
+    y = "Średni odsetek odrzuceń H0",
+    color = "Liczba klas"
+  ) +
+  theme_minimal()
+```
+
+
+#### Wnioski
+
+- Dla małych prób możemy zauważyć **większą wariancję**
+- Optymalna liczba klas zależy od wielkości próbki. Dla małych próbek lepiej stosować mniej klas, dla dużych można ich używać więcej.
+- Zbyt mała liczba klas może ukrywać różnice, a zbyt duża powodować problemy z niskimi oczekiwanymi licznościami.
+
+Sprawdźmy wpływ stopni swobody oraz liczby klas przyjmując `n=50`:
+
+```{r echo=FALSE}
+results_avg <- results %>%
+  filter(n == 50) %>%
+  group_by(df, bins) %>%
+  summarise(mean_reject_rate = mean(reject_rate), .groups = "drop")
+
+
+ggplot(results_avg, aes(x = df, y = mean_reject_rate, color = factor(bins))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  facet_wrap(~bins) + 
+  scale_x_continuous(breaks = unique(results_avg$df)) +
+  labs(
+    title = "Wpływ stopni swobody i liczby klas na moc testu χ² (n=50)",
+    x = "Stopnie swobody (df)",
+    y = "Średni odsetek odrzuceń H0",
+    color = "Liczba klas"
+  ) +
+  theme_minimal()
+```
+
+#### Wnioski:
+
+- Przy małych liczbie klas test jest stabilniejszy - odsetek odrzuceń $H_{0}$ **zmienia się łagodniej**.
+- Ponownie, zbyt duża liczba klas powoduje niestabilność wyników.
+- **Interakcja między liczbą klas a stopniami swobody wpływa na moc testu**
